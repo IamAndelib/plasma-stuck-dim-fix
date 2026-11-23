@@ -1,0 +1,14 @@
+[Unit]
+Description=Undo KDE Plasma idle dimming that stays stuck after unlock
+Documentation=https://github.com/IamAndelib/plasma-stuck-dim-fix
+PartOf=graphical-session.target
+After=graphical-session.target plasma-powerdevil.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/plasma-stuck-dim-fix
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# plasma-stuck-dim-fix: undo KDE Plasma's idle dimming when it gets stuck after unlock.
+#
+# On Plasma 6 (Wayland), PowerDevil dims idle screens through KWin's per-output
+# "dimming" multiplier. If the monitor drops off the bus while the screen is off
+# (common with HDMI/DP monitors that deep-sleep), PowerDevil can stay in its
+# dimmed state after you come back: the brightness slider still shows the right
+# value, but the picture is darker (e.g. 30% of it), and moving the slider
+# re-applies the dim. Restarting PowerDevil clears it.
+#
+# This watches for the session being unlocked and, a few seconds later, checks
+# every output. If one is still dimmed while you are clearly active, it restarts
+# PowerDevil. It never touches brightness itself and does nothing otherwise.
+#
+# Usage:
+#   plasma-stuck-dim-fix           watch for unlocks (what the systemd unit runs)
+#   plasma-stuck-dim-fix --check   check once now and fix if stuck
+#   plasma-stuck-dim-fix --status  print each output's brightness and dimming
+#
+# https://github.com/IamAndelib/plasma-stuck-dim-fix  (GPL-3.0-or-later)
+
+set -u
+
+DELAY="${PLASMA_STUCK_DIM_DELAY:-3}"     # seconds to wait after unlock before checking
+SERVICE="${PLASMA_STUCK_DIM_SERVICE:-plasma-powerdevil.service}"
+
+log() { printf '%s\n' "$*"; }   # stdout goes to the journal under systemd
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || { log "error: '$1' not found${2:+ ($2)}"; exit 2; }
+}
+
+# Prints "<output-name> <brightness%> <dimming%>" for every output that reports
+# brightness control. Parses kscreen-doctor's text output, e.g.
+#   Output: 1 HDMI-A-1 <uuid>
+#       Brightness control: supported, set to 75% and dimming to 30%
+outputs() {
+    local name="" line b d
+    while IFS= read -r line; do
+        if [[ $line =~ ^Output:\ +[0-9]+\ +([^ ]+) ]]; then
+            name="${BASH_REMATCH[1]}"
+        elif [[ $line =~ set\ to\ ([0-9.]+)%\ and\ dimming\ to\ ([0-9.]+)% ]]; then
+            b="${BASH_REMATCH[1]}"; d="${BASH_REMATCH[2]}"
+            printf '%s %s %s\n' "$name" "$b" "$d"
+        fi
+    done < <(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+}
+
+# Prints the outputs whose dimming is below 100%.
+stuck() {
+    local name b d
+    while read -r name b d; do
+        [[ -n $name ]] || continue
+        awk -v d="$d" 'BEGIN { exit !(d < 100) }' && printf '%s (brightness %s%%, dimming %s%%)\n' "$name" "$b" "$d"
+    done < <(outputs)
+}
+
+locked() {
+    local reply
+    reply=$(busctl --user call org.freedesktop.ScreenSaver /ScreenSaver \
+        org.freedesktop.ScreenSaver GetActive 2>/dev/null) || return 1
+    [[ $reply == "b true" ]]
+}
+
+check() {
+    local why="$1" found after
+    found=$(stuck)
+    if [[ -z $found ]]; then
+        log "$why: no dimmed outputs, nothing to do"
+        return 0
+    fi
+    if locked; then
+        log "$why: dimmed, but the session is locked again; leaving it"
+        return 0
+    fi
+    log "$why: dimming stuck on: $(echo "$found" | paste -sd ';' | sed 's/;/; /g')"
+    log "restarting $SERVICE"
+    systemctl --user restart "$SERVICE" || { log "error: restarting $SERVICE failed"; return 1; }
+    sleep 3
+    after=$(stuck)
+    if [[ -z $after ]]; then
+        log "fixed: all outputs undimmed"
+    else
+        log "still dimmed after restart: $(echo "$after" | paste -sd ';' | sed 's/;/; /g')"
+        return 1
+    fi
+}
+
+watch() {
+    need dbus-monitor "install your distro's dbus tools package"
+    log "watching for unlocks (check delay ${DELAY}s)"
+    local last=0 now pending=0 line
+    # ActiveChanged is emitted on both /ScreenSaver and /org/freedesktop/ScreenSaver,
+    # so one unlock arrives twice; the time check below collapses them.
+    while IFS= read -r line; do
+        if [[ $line == *member=ActiveChanged* ]]; then
+            pending=1
+        elif (( pending )) && [[ $line =~ boolean\ (true|false) ]]; then
+            pending=0
+            [[ ${BASH_REMATCH[1]} == false ]] || continue
+            now=$(date +%s)
+            (( now - last < 10 )) && continue
+            last=$now
+            sleep "$DELAY"
+            check "unlock"
+        fi
+    done < <(dbus-monitor --session \
+        "type='signal',interface='org.freedesktop.ScreenSaver',member='ActiveChanged'" 2>/dev/null)
+    log "dbus-monitor exited"
+    exit 1
+}
+
+need kscreen-doctor "part of KDE Plasma (libkscreen)"
+
+case "${1:-}" in
+    "")             watch ;;
+    --check)        check "manual check" ;;
+    --status)
+        out=$(outputs)
+        if [[ -z $out ]]; then
+            log "no outputs report brightness control (or this kscreen-doctor doesn't show dimming)"
+        else
+            while read -r name b d; do
+                printf '%-12s brightness %s%%  dimming %s%%\n' "$name" "$b" "$d"
+            done <<<"$out"
+        fi ;;
+    -h|--help)      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)              log "unknown option: $1 (try --help)"; exit 2 ;;
+esac
