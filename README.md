@@ -5,6 +5,8 @@
 
 Fixes a KDE Plasma 6 bug where the screen stays dim after you unlock it.
 
+> **Fixed upstream in Plasma 6.8.4.** KDE merged the real fix on 2026-11-22 ([commit](https://invent.kde.org/plasma/powerdevil/-/commit/fb6c6f6f930f1cfa7f3ca90c037cac790eecc9d8)). Use this until your distro ships PowerDevil 6.8.4 or later, then run `./uninstall.sh`. Check your version with `plasmashell --version`.
+
 ## The problem
 
 You lock the screen (or walk away), come back, unlock, and the screen is darker than before. The brightness slider still shows the same value, and moving the slider doesn't help: the moment you touch it, the screen goes dim again.
@@ -15,9 +17,9 @@ It happens "sometimes". It usually takes a lock long enough for the screen to tu
 
 Plasma dims an idle screen without changing your brightness. PowerDevil, Plasma's power manager, asks KWin to multiply the picture by a dimming factor (30% on the systems seen so far) and asks it to go back to 100% when you return.
 
-If the monitor drops off while the screen is off, PowerDevil can miss the "you're back" step. It stays in its dimmed state and keeps telling KWin to dim the screen, including every time you move the slider. Restarting PowerDevil clears it.
+The dimming is done by a part of PowerDevil that only exists while a monitor with brightness control is connected. If your only such monitor drops off while dimmed (the screen turned off and the monitor went to sleep, or you suspended), PowerDevil deletes that part, but the 30% limit it set stays behind. When the monitor comes back, the new part doesn't know it has to undim, and the leftover 30% is applied to the monitor again. It is then re-sent every time you move the slider. Restarting PowerDevil clears the leftover limit.
 
-Upstream reports: [KDE bug 504441](https://bugs.kde.org/show_bug.cgi?id=504441), [KDE bug 516631](https://bugs.kde.org/show_bug.cgi?id=516631).
+Upstream: fixed by [this PowerDevil commit](https://invent.kde.org/plasma/powerdevil/-/commit/fb6c6f6f930f1cfa7f3ca90c037cac790eecc9d8) (KDE bugs [513809](https://bugs.kde.org/show_bug.cgi?id=513809) and [528077](https://bugs.kde.org/show_bug.cgi?id=528077)). Similar reports: [504441](https://bugs.kde.org/show_bug.cgi?id=504441), [516631](https://bugs.kde.org/show_bug.cgi?id=516631).
 
 ## Do you have it?
 
